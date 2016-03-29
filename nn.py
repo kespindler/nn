@@ -1,4 +1,5 @@
 import numpy as np
+from PIL import Image
 import pickle
 
 
@@ -51,6 +52,16 @@ def load_csv():
     return train, test
 
 
+def save_from_csv():
+    train, test = load_csv()
+    y = train[1:, 0]
+    x = train[1:, 1:]
+    test = test[1:, :]
+    save(x, 'x')
+    save(y, 'y')
+    save(test, 'test')
+
+
 def load_data():
     # 0 mean center the data
     # one-hot encode y
@@ -78,32 +89,53 @@ def predict(y, yhat):
 
 
 def update(x, w, y, yhat):
-    err = y - yhat  # 10k x 10
+    y_diff = y - yhat
+    err = 0.5 * y_diff ** 2
+    rate = 1e-5
 
-    rate = 1e-4
-
-    delta = x.T @ dtanh(yhat) * rate
+    delta = x.T @ (y_diff * dtanh(yhat)) * rate
 
     w += delta
 
-    return np.sum(err)  # total loss
+    return np.sum(err) / y.size  # total loss
 
 
 def align(f):
     return ('%.2f' % f).zfill(5)
 
 
+def visu(w):
+    # visu(w)
+    # visu(x[:10, :].T)
+    w = w.copy()
+    for i in range(w.shape[1]):
+        wi = w[:, i]
+        wi -= wi.min()
+        wi *= 255 / wi.max()
+        pixels = wi.astype(np.uint8).reshape(28, 28)
+        pixels = np.tile(pixels, (3, 1, 1)).T
+        img = Image.fromarray(pixels, 'RGB')
+        img.save('vis/w_%02d.png' % i)
+
+
+def new_w(shape):
+    n_inputs = shape[0]
+    w = np.random.randn(*shape) * np.sqrt(2.0/n_inputs)
+    return w
+
+
+def save_new_w():
+    x, y, test = load_data()
+    w = new_w((x.shape[1], 10))
+    save(w, 'w')
+
+
 def main():
     x, y, test = load_data()
-    # x = x[:10000, :]
-    # y = y[:10000, :]
 
     w = load('w')
 
-    # w = np.random.randn(test.shape[1], 10) * np.sqrt(2/test.shape[1])
-    # save(w, 'w')
-
-    for i in range(100):
+    for i in range(500):
         yhat = compute(x, w, np.max(y) + 1)
         percent_correct = predict(y, yhat)
         loss = update(x, w, y, yhat)
@@ -111,6 +143,10 @@ def main():
             i, align(percent_correct * 100), loss
         ))
 
+    visu(w)
+
     return x, y, test, w
 
-x, y, test, w = main()
+
+if __name__ == '__main__':
+    X, Y, Test, W = main()
