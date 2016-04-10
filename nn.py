@@ -1,121 +1,86 @@
 import numpy as np
 from PIL import Image
 import pickle
+import gzip
 
 
-# Things to try out
-# 1. relu
-# 2. analytic gradient
-# 3. use bias
-# 4. regularization
+def read_file(fname):
+    fpath = 'MNIST_data/' + fname
+    return gzip.GzipFile(fpath)
 
 
-def sigmoid(x):
-    return 1 / (1 + np.exp(-x))
+def save_image(pixels, fname):
+    """Takes ndarray with dtype=int8
+
+    :param pixels:
+    :param fname:
+    :return:
+    """
+    pixels = np.tile(pixels, (3, 1, 1)).T
+    pixels = np.rot90(pixels)
+    pixels = np.flipud(pixels)
+    img = Image.fromarray(pixels, 'RGB')
+    img.save('vis/%s.png' % fname)
 
 
-def dsigmoid(y):
-    # y already sigmoided
-    return y * (1 - y)
+def read_label_file(fname):
+    dt = np.dtype('int32').newbyteorder('>')
+    with read_file(fname) as f:
+        f.read(4)
+        buf = f.read(4)
+        n_items = np.frombuffer(buf, dt)[0]
+        buf = f.read()
+        y = np.frombuffer(buf, 'uint8')
+    assert y.size == n_items
+    y_one_hot = np.zeros((y.size, np.max(y) + 1))
+    y_one_hot[np.arange(y.size), y] = 1
+    return y_one_hot
 
 
-def tanh(x):
-    return np.tanh(x)
+def read_image_file(fname):
+    dt = np.dtype('int32').newbyteorder('>')
+    with read_file(fname) as f:
+        f.read(4)
+        buf = f.read(4)
+        n_items = np.frombuffer(buf, dt)[0]
+        buf = f.read(4)
+        n_rows = np.frombuffer(buf, dt)[0]
+        buf = f.read(4)
+        n_cols = np.frombuffer(buf, dt)[0]
+        buf = f.read()
+        x = np.frombuffer(buf, 'uint8')
+    assert x.size == n_items * n_rows * n_cols
+    x = x.astype('float32') / 255.0
+    x = x.reshape(n_items, n_rows * n_cols)
+    for i in range(n_rows * n_cols):
+        x[:, i] -= x[:, i].mean()
+    return x
 
 
-def dtanh(y):
-    return 1 - y * y
+class DataSet:
+    def __init__(self):
+        self.test_x = read_image_file('t10k-images-idx3-ubyte.gz')
+        self.test_y = read_label_file('t10k-labels-idx1-ubyte.gz')
+        self.x = read_image_file('train-images-idx3-ubyte.gz')
+        self.y = read_label_file('train-labels-idx1-ubyte.gz')
+        self.batch_size = 100
+        assert self.x.shape[0] >= self.batch_size
+        self.i = 0
+        self.indexer = np.arange(0, self.test_x.shape[0])
+        np.random.shuffle(self.indexer)
 
+    def __iter__(self):
+        return self
 
-def relu(x):
-    return np.max(0, x)
+    def __next__(self):
+        slice_indices = self.indexer[self.i:self.i+self.batch_size]
+        if slice_indices.size < self.batch_size:
+            self.i = 0
+            np.random.shuffle(self.indexer)
+            return next(self)
 
-
-def drelu(y):
-    # confirm correct
-    return int(y > 0)
-
-
-def save(arr, arr_name):
-    with open('data/{}.pkl'.format(arr_name), 'wb') as f:
-        pickle.dump(arr, f)
-
-
-def load(arr_name):
-    return pickle.load(open('data/{}.pkl'.format(arr_name), 'rb'))
-
-
-def load_csv():
-    # for train, train[1:, 0] is y value, train[1:, 1:] is data
-    train = np.genfromtxt('data/train.csv', delimiter=',')
-    test = np.genfromtxt('data/test.csv', delimiter=',')
-    return train, test
-
-
-def save_from_csv():
-    train, test = load_csv()
-    y = train[1:, 0]
-    x = train[1:, 1:]
-    test = test[1:, :]
-    save(x, 'x')
-    save(y, 'y')
-    save(test, 'test')
-
-
-def load_data():
-    # 0 mean center the data
-    # one-hot encode y
-    x = pickle.load(open('data/x.pkl', 'rb'))
-    x -= np.mean(x, 0)
-    y = pickle.load(open('data/y.pkl', 'rb'))
-    yy = np.zeros((y.size, np.max(y) + 1))
-    yy[np.arange(y.size), y.astype('int')] = 1
-    test = pickle.load(open('data/test.pkl', 'rb'))
-    return x, yy, test
-
-
-def compute(x, w, n_classes):
-    activation = x @ w
-    # yhat = np.argmax(activation, 1)
-    yhat = tanh(activation)
-    return yhat
-
-
-def predict(y, yhat):
-    yy = np.argmax(y, 1)
-    yyhat = np.argmax(yhat, 1)
-    correct = (yy == yyhat)
-    return np.mean(correct)
-
-
-def update(x, w, y, yhat):
-    y_diff = y - yhat
-    err = 0.5 * y_diff ** 2
-    rate = 1e-5
-
-    delta = x.T @ (y_diff * dtanh(yhat)) * rate
-
-    w += delta
-
-    return np.sum(err) / y.size  # total loss
-
-
-def align(f):
-    return ('%.2f' % f).zfill(5)
-
-
-def visu(w):
-    # visu(w)
-    # visu(x[:10, :].T)
-    w = w.copy()
-    for i in range(w.shape[1]):
-        wi = w[:, i]
-        wi -= wi.min()
-        wi *= 255 / wi.max()
-        pixels = wi.astype(np.uint8).reshape(28, 28)
-        pixels = np.tile(pixels, (3, 1, 1)).T
-        img = Image.fromarray(pixels, 'RGB')
-        img.save('vis/w_%02d.png' % i)
+        self.i += self.batch_size
+        return self.x[slice_indices, :], self.y[slice_indices, :]
 
 
 def new_w(shape):
@@ -124,29 +89,69 @@ def new_w(shape):
     return w
 
 
-def save_new_w():
-    x, y, test = load_data()
-    w = new_w((x.shape[1], 10))
-    save(w, 'w')
+def numerical_gradient(xs, w, ys):
+    h = 1e-5
+    grad = np.zeros(w.shape)
+    for i in range(w.shape[0]):
+        for j in range(w.shape[1]):
+            w[i, j] -= h
+            yhat_prime = forward(xs, w)
+            lprime = loss(yhat_prime, ys)
+            w[i, j] += 2*h
+            yhat_prime2 = forward(xs, w)
+            lprime2 = loss(yhat_prime2, ys)
+            grad[i, j] = (lprime2 - lprime) / (2 * h) / ys.shape[0]
+            w[i, j] -= h
+    return grad
+
+
+def loss(yhat, y):
+    y = np.argmax(y)
+    correct_logprops = -np.log(yhat[:, y])
+    return np.sum(correct_logprops) / y.size
 
 
 def main():
-    x, y, test = load_data()
+    d = DataSet()
+    w = new_w((784, 10))
 
-    w = load('w')
-
-    for i in range(500):
-        yhat = compute(x, w, np.max(y) + 1)
-        percent_correct = predict(y, yhat)
-        loss = update(x, w, y, yhat)
-        print('%02d %s%% %.5f' % (
-            i, align(percent_correct * 100), loss
+    print('ag = analytic gradient. ng = numerial gradient')
+    for i in range(1000):
+        xs, ys = next(d)
+        yhat = forward(xs, w)
+        # correct_logprops = -np.log(yhat * ys)
+        # loss = np.sum(correct_logprops) / xs.shape[0]
+        dscores = yhat
+        dscores -= ys
+        dscores /= xs.shape[0]
+        delta = xs.T @ dscores
+        # delta2 = numerical_gradient(xs, w, ys)
+        rate = 0.01
+        yhat_test = forward(d.test_x, w)
+        acc = accuracy(yhat_test, d.test_y)
+        print('i:%02d acc:%f ag_min:%f ag_max:%f' % ( # ng_min:%f ng_max:%f' % (
+            i, acc, delta.min(), delta.max()# , delta2.min(), delta2.max()
         ))
-
-    visu(w)
-
-    return x, y, test, w
+        w -= rate * delta
 
 
-if __name__ == '__main__':
-    X, Y, Test, W = main()
+def accuracy(yhat, y):
+    yhat = np.argmax(yhat, axis=1)
+    y = np.argmax(y, axis=1)
+    correct = (yhat == y)
+    return np.sum(correct) / y.size
+
+
+def forward(xs, w):
+    activation = xs @ w
+    softmax = np.zeros(activation.shape)
+    for i in range(xs.shape[0]):
+        act = activation[i, :]
+        act -= act.max()
+        eact = np.exp(act)
+        p = eact / eact.sum()
+        softmax[i, :] = p
+    return softmax
+
+
+main()
